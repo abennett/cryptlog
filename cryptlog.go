@@ -21,6 +21,12 @@ type CryptLog struct {
 	block cipher.Block
 }
 
+func New(key string) (*CryptLog, error) {
+	return &CryptLog{
+		key: []byte(key),
+	}, nil
+}
+
 func (cl *CryptLog) SetBlock(salt []byte) error {
 	k, err := scrypt.Key(cl.key, salt, 32768, 8, 1, 32)
 	if err != nil {
@@ -39,12 +45,6 @@ type CryptLogAppender interface {
 	GetSalt() ([]byte, error)
 	io.ReadWriteCloser
 	io.WriterAt
-}
-
-func New(key string) (*CryptLog, error) {
-	return &CryptLog{
-		key: []byte(key),
-	}, nil
 }
 
 func indexPadding(block []byte) int {
@@ -95,7 +95,7 @@ func (cl *CryptLog) buildOutput(lastTwoDecrypted, data []byte) (out []byte, err 
 	return out, nil
 }
 
-func Init(log io.Writer) ([]byte, error) {
+func (cl *CryptLog) Init(log io.Writer) ([]byte, error) {
 	header := make([]byte, 2*aes.BlockSize)
 	_, err := rand.Reader.Read(header[:aes.BlockSize])
 	if err != nil {
@@ -105,7 +105,8 @@ func Init(log io.Writer) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return header, nil
+	err = cl.SetBlock(header[:aes.BlockSize])
+	return header, err
 }
 
 func (cl *CryptLog) Append(log CryptLogAppender, data []byte) error {
@@ -117,24 +118,24 @@ func (cl *CryptLog) Append(log CryptLogAppender, data []byte) error {
 		return err
 	}
 	if lastTwo == nil {
-		lastTwo, err = Init(log)
+		lastTwo, err = cl.Init(log)
 		if err != nil {
 			return err
 		}
 	} else {
+		salt, err := log.GetSalt()
+		if err != nil {
+			return err
+		}
+		if err = cl.SetBlock(salt); err != nil {
+			return err
+		}
 		err = cl.decryptLast(lastTwo)
 		if err != nil {
 			return err
 		}
 	}
 	iv := lastTwo[:aes.BlockSize]
-	salt, err := log.GetSalt()
-	if err != nil {
-		return err
-	}
-	if err = cl.SetBlock(salt); err != nil {
-		return err
-	}
 	out, err := cl.buildOutput(lastTwo, data)
 	if err != nil {
 		return err
