@@ -25,6 +25,8 @@ func OpenFile(name string) (*FileCryptLogger, error) {
 	if size%aes.BlockSize != 0 {
 		return nil, errors.New("invalid size")
 	}
+	// writeAt should be one AES block behind the end of the file,
+	// except for new files
 	var writeAt int64
 	if size == 0 {
 		writeAt = 0
@@ -46,6 +48,7 @@ func (fcl *FileCryptLogger) LastTwoBlocks() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("unable to read last two blocks: %w", err)
 	}
+	// Reset reader after fetching last two blocks
 	if _, err = fcl.file.Seek(0, 0); err != nil {
 		return nil, err
 	}
@@ -69,13 +72,7 @@ func (fcl *FileCryptLogger) Read(b []byte) (int, error) {
 }
 
 func (fcl *FileCryptLogger) Write(b []byte) (int, error) {
-	var written int
-	var err error
-	if fcl.writeAt == 0 {
-		written, err = fcl.file.Write(b)
-	} else {
-		written, err = fcl.file.WriteAt(b, fcl.writeAt)
-	}
+	written, err := fcl.file.WriteAt(b, fcl.writeAt)
 	fcl.writeAt += int64(written) - aes.BlockSize
 	return written, err
 }
