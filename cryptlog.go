@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 
@@ -63,20 +64,35 @@ func calculatePadding(length int) int {
 	return 0
 }
 
-func (cl *CryptLog) buildOutput(lastTwo, data []byte) (iv, out []byte, err error) {
-	if len(lastTwo) != 2*aes.BlockSize {
-		return nil, nil, ErrLastTwoSize
+func printBlocks(b []byte) {
+	var last, count int
+	for x := 16; x <= len(b); x += 16 {
+		count++
+		fmt.Printf("%d: %v\t%s\n", count, b[last:x], b[last:x])
 	}
-	iv = lastTwo[:aes.BlockSize]
+}
+
+func (cl *CryptLog) decryptLast(lastTwo []byte) error {
+	if len(lastTwo) != 2*aes.BlockSize {
+		return ErrLastTwoSize
+	}
+	iv := lastTwo[:aes.BlockSize]
 	decrypter := cipher.NewCBCDecrypter(cl.block, iv)
 	decrypter.CryptBlocks(lastTwo[aes.BlockSize:], lastTwo[aes.BlockSize:])
-	pIdx := indexPadding(lastTwo[aes.BlockSize:])
-	length := len(data) + len(lastTwo[:pIdx])
+	return nil
+}
+
+func (cl *CryptLog) buildOutput(lastTwoDecrypted, data []byte) (out []byte, err error) {
+	if len(lastTwoDecrypted) != 2*aes.BlockSize {
+		return nil, ErrLastTwoSize
+	}
+	pIdx := indexPadding(lastTwoDecrypted[aes.BlockSize:])
+	length := len(data) + len(lastTwoDecrypted[:pIdx])
 	padding := calculatePadding(length)
 	out = make([]byte, length+padding)
-	copy(out[:aes.BlockSize], lastTwo[aes.BlockSize:])
+	copy(out[:aes.BlockSize], lastTwoDecrypted[aes.BlockSize:])
 	copy(out[pIdx:], data)
-	return iv, out, nil
+	return out, nil
 }
 
 func Init(log io.Writer) ([]byte, error) {
@@ -105,7 +121,13 @@ func (cl *CryptLog) Append(log CryptLogAppender, data []byte) error {
 		if err != nil {
 			return err
 		}
+	} else {
+		err = cl.decryptLast(lastTwo)
+		if err != nil {
+			return err
+		}
 	}
+	iv := lastTwo[:aes.BlockSize]
 	salt, err := log.GetSalt()
 	if err != nil {
 		return err
@@ -113,7 +135,7 @@ func (cl *CryptLog) Append(log CryptLogAppender, data []byte) error {
 	if err = cl.SetBlock(salt); err != nil {
 		return err
 	}
-	iv, out, err := cl.buildOutput(lastTwo, data)
+	out, err := cl.buildOutput(lastTwo, data)
 	if err != nil {
 		return err
 	}
